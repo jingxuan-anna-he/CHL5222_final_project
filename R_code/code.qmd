@@ -1,0 +1,593 @@
+---
+title: "Analysis of Correlated Data (CHL5222H) FInal Project"
+subtitle: "Beating the Blues"
+author: Meagan Lacroix
+format: pdf
+---
+
+```{r setup, include=FALSE}
+library(here)
+library(tidyverse)
+library(tinytex)
+library(knitr)
+library(kableExtra)
+library(nlme)
+library(texreg)
+library(AICcmodavg)
+
+knitr::opts_knit$set(root.dir = here())
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+theme_set(theme_bw(base_size = 15)) # Use black/white theme and increase font size for all ggplot figures
+```
+
+```{r}
+btb <- read.table(here("data", "btheb.txt"), header = TRUE)
+```
+
+```{r}
+names(btb)
+head(btb)
+tail(btb)
+```
+## Data preparation
+```{r}
+#add participant ID
+btb <- btb %>%
+  mutate(id = row_number()) %>%
+  select(id, everything())
+```
+
+```{r}
+#make drug, length, and treatment as factors
+btb <- btb %>%
+  mutate(
+    drug = factor(drug, levels = c("No", "Yes")),  # Set reference level
+    length = factor(length, levels = c("<6m", ">6m")),  # Set reference level
+    treatment = factor(treatment, levels = c("TAU", "BtheB"))  # Set TAU as reference
+  )
+```
+
+```{r}
+str(btb)  # Check structure
+```
+
+```{r}
+#make data set long
+btb.long <- btb %>%
+pivot_longer(cols = c("bdi.pre","bdi.2m", "bdi.4m", "bdi.6m", "bdi.8m"),
+names_to = "visit",
+values_to = "score")%>%
+  mutate(
+    occasion = case_when(
+      visit == "bdi.pre" ~ 0,
+      visit == "bdi.2m"  ~ 1,
+      visit == "bdi.4m"  ~ 2,
+      visit == "bdi.6m"  ~ 3,
+      visit == "bdi.8m"  ~ 4))
+```
+
+
+### EDA
+```{r}
+#make summary table for plotting
+btb_summary <- btb.long %>%
+  group_by(occasion, treatment, drug, length) %>%
+  summarise(
+    mean_bdi = mean(score, na.rm = TRUE),
+    sd_bdi = sd(score, na.rm = TRUE)
+  ) %>%
+  ungroup()
+```
+
+```{r}
+#Mean BDI score over time by group
+
+ggplot(btb_summary, aes(x = occasion, y = mean_bdi, color = treatment, group = treatment)) +
+  geom_line(size = 1) +    # Line plot for mean BDI over time
+  geom_point(size = 2) +   # Add points for means
+  geom_errorbar(aes(ymin = mean_bdi-sd_bdi, ymax = mean_bdi+sd_bdi), width = 0.2) + # Add 95% CI
+  facet_grid(drug ~ length) +  # Panel by drug and length groups
+  labs(title = "Mean BDI Score Over Time by Treatment",
+       x = "Occasion", y = "Mean BDI Score",
+       color = "Treatment Group") +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 12, face = "bold"))+
+  ylim(0, 60) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+#create histogram of the distribution of scores
+
+ggplot(btb, aes(x = bdi.pre)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of BDI Scores Pre-Intervention", x = "BDI Score", y = "Count") +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+#create histogram of distribution of scores for each treatment group
+ggplot(btb, aes(x = bdi.pre)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of BDI Scores Pre-Intervention", x = "BDI Score", y = "Count") +
+  theme_minimal() + 
+  facet_wrap(~ treatment) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+btb_plot_summary <- btb.long %>%
+  group_by(occasion, treatment) %>%
+  summarise(mean_score = mean(score, na.rm = TRUE), .groups = "drop")
+
+# Create the plot with trend line for mean values
+ggplot(btb.long, aes(x = occasion, y = score, color = treatment)) +
+  geom_point(alpha = 0.5) +  # Show individual data points
+  geom_line(data = btb_plot_summary, aes(x = occasion, y = mean_score, color = treatment, group = treatment), size = 1.2) +  # Line for mean trend
+  labs(title = "BDI Score Trends Over Time", x = "Occasion", y = "BDI Score",
+       color = "Treatment") +
+  scale_x_continuous(breaks = c(0, 1, 2, 3, 4),  # Specify breaks
+                     labels = c("Baseline", "Month 2", "Month 4", "Month 6", "Month 8")) + 
+  theme_minimal() +
+  ylim(0, 60) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Summarize counts for Table 1
+summary_table <- btb %>%
+  group_by(drug, length, treatment) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  pivot_wider(names_from = treatment, values_from = Count, values_fill = 0) %>%
+  rename("Treatment as Usual" = `TAU`, "Beat the Blues" = `BtheB`) %>%
+  mutate(Total = `Treatment as Usual` + `Beat the Blues`) %>%
+  rename(Drug = drug, Length = length)
+
+# Compute total row
+total_row <- summary_table %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  mutate(Drug = "Total", Length = "")
+
+# Combine with total row
+summary_table <- bind_rows(summary_table, total_row)
+```
+
+```{r}
+summary_table %>%
+  kable(format = "html", caption = "<p style='text-align:center; font-weight:bold;'>Table 1. Number of Participants per Treatment Group</p>", align = "c") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" " = 2, "Treatment Group" = 3)) 
+```
+
+```{r}
+btb_summary2 <- btb.long %>%
+  group_by(treatment, occasion) %>%
+  summarise(
+    mean_bdi = mean(score, na.rm = TRUE),
+    sd_bdi = sd(score, na.rm = TRUE)
+  ) %>%
+  mutate(occasion = case_when(
+    occasion == 0 ~ "Baseline",
+    occasion == 1 ~ "Month 2",
+    occasion == 2 ~ "Month 4",
+    occasion == 3 ~ "Month 6",
+    occasion == 4 ~ "Month 8"
+  )) %>%
+  ungroup()
+```
+
+```{r}
+#Table for Mean and SD BDI scores over time by treatment group
+
+# Pivot data to wide format
+summary2_wide <- btb_summary2 %>%
+  pivot_wider(names_from = treatment, values_from = c(mean_bdi, sd_bdi)
+  )
+#Reorder columns
+summary2_wide <- summary2_wide %>%
+  select(occasion, `mean_bdi_TAU`, `sd_bdi_TAU`, `mean_bdi_BtheB`, `sd_bdi_BtheB`)
+
+
+colnames(summary2_wide) <- c("Occasion", "Mean", "SD", "Mean", "SD")
+
+
+summary2_wide %>%
+  kable(format = "html", caption = "<p style='text-align:center; font-weight:bold;'>Mean BDI Scores Over Time by Treatment Group</p>", align = "c") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" " = 1, "Treatment as Usual" = 2, "Beat the Blues" = 2))
+
+```
+
+```{r}
+ggplot(btb_summary2, aes(x = occasion, y = mean_bdi, color = treatment, group = treatment)) +
+  geom_line(size = 1) +    # Line plot for mean BDI over time
+  geom_point(size = 2) +   # Add points for means
+  geom_errorbar(aes(ymin = mean_bdi - sd_bdi, ymax = mean_bdi + sd_bdi), width = 0.2) + # Add 95% CI
+  labs(title = "Mean BDI Score Over Time by Treatment",
+       x = "Occasion", y = "Mean BDI Score",
+       color = "Treatment Group") +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 12, face = "bold"))+
+  ylim(0, 60) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+### Summarizing missing data
+```{r}
+#summarizing number of non-NA observations at each occasion
+measurement_counts <- btb.long %>%
+  group_by(occasion) %>%
+  summarise(n = sum(!is.na(score)))
+
+measurement_counts
+```
+
+```{r}
+#summarize missing data per group
+
+measurement_counts2 <- btb.long %>%
+  group_by(treatment, occasion) %>%
+  summarise(n = sum(is.na(score)), .groups = "drop")
+
+measurement_counts2_wide <- measurement_counts2 %>%
+  pivot_wider(names_from = treatment, values_from = n) %>%
+  mutate(Total = TAU + BtheB)
+
+measurement_counts2_wide
+```
+
+### Methods
+
+```{r}
+##compare mean models to find best out of that
+#looks like there is a treatment difference
+#looks like they are parallel 
+#looks like small time trend, especially at beginning of trial, then it smooths out
+#most likely linear but will check quadratic time trend
+
+#don't need to include treatment bc it is a randomized trial
+#24% of data is missing - assume MAR, use multiple imputation
+library(mice)
+sapply(btb.long, function(x) sum(is.na(x)))
+
+btb %>%
+  dplyr::select(-id, -drug, -length, -treatment) %>%
+  md.pattern()
+
+# missing data is monotone, arising from dropout, use likelihood methods like in class
+```
+```{r}
+# spaghetti plot
+ggplot(btb.long, aes(x = occasion, y = score, group = id, color = factor(treatment))) +
+  geom_line(alpha = 0.4) +          # Individual trajectories
+  geom_smooth(aes(group = treatment), method = "loess", se = FALSE, linewidth = 1.2) +  # Marginal means
+  labs(
+    x = "Time",
+    y = "BDI Score",
+    color = "Treatment Group",
+    title = "Spaghetti Plot with Marginal Mean Response Over Time"
+  ) +
+  theme_minimal()
+##spaghetti plot shows high variation between subject BDI scores so we will fit a LMM with random intercept and maybe random slope to account for this variation
+```
+
+
+```{r}
+# pre post
+# time: 0 1 2 3 4
+btb.long <- btb.long %>%
+  group_by(id) %>%
+  mutate(time = row_number() - 1, 
+         post = ifelse(time > 0, 1, 0)) %>%
+  ungroup()
+
+btb.long <- btb.long %>%
+  mutate(month = ifelse(occasion == 0,0,
+                        ifelse(occasion == 1,2,
+                            ifelse(occasion== 2,4,
+                               ifelse(occasion== 3,6,
+                                ifelse(occasion == 4, 8, NA))))),
+    knot = ifelse(month - 2 < 0, 0, month - 2))
+
+
+btb.long <- na.omit(btb.long) 
+
+# random intercept
+mod1.intp <- lme(score ~ post + drug + length + post:treatment,
+               random = ~ 1 | id, data = btb.long, na.action = na.omit)
+summary(mod1.intp)
+
+# random intercept and slope model
+mod1.slope <- lme(score ~ post + drug+ length + post:treatment, 
+                  random = ~ post | id, data = btb.long, na.action = na.omit)
+summary(mod1.slope)
+
+# compare
+mod1.intp.ml <- lme(score ~ post + drug + length + post:treatment, random = ~ 1 | id, 
+                  method = "ML", data = btb.long, na.action = na.omit)
+mod1.slope.ml <- lme(score ~ post + drug + length + post:treatment, random = ~ post | id, 
+                  method = "ML", data = btb.long, na.action = na.omit, 
+#control = lmeControl(opt = "optim", maxIter = 50, msMaxIter = 50)
+)
+anova(mod1.un.ml, mod1.slope.ml)
+
+#since p-value <0.0001, the random intercept and slope model is significantly better
+#also exclude drug because it is not significant in either model
+
+# final model
+mod1.slope1 <- lme(score ~ post + length + post:treatment, 
+                  random = ~ post | id, data = btb.long, na.action = na.omit)
+```
+
+```{r}
+lme.intp <- lme(score ~ occasion + drug + length + occasion:treatment, 
+                random = ~ 1 | id,
+                data = btb.long, na.action = na.omit)
+summary(lme.intp)
+
+lme.slope <- lme(score ~ occasion + drug + length + occasion:treatment, 
+                 random = ~ occasion | id,
+                 data = btb.long, na.action = na.omit)
+summary(lme.slope)
+
+lme.intp1 <- lme(score ~ occasion + length + occasion:treatment, 
+                random = ~ 1 | id,
+                data = btb.long, na.action = na.omit)
+
+outAIC <- function(x){
+  sumx <- summary(x)
+  out <- c(sumx$AIC, sumx$BIC)
+  names(out) <- c("AIC", "BIC")
+  out
+}
+allaic <- rbind(
+  outAIC(lme.intp),
+  outAIC(lme.slope),
+  outAIC(lme.intp1)
+)
+rownames(allaic) <- c("lme.intp", "lme.slope", "lme.intp1")
+allaic
+#AIC is similar for all models but BIC is lowest for lme.intp1 (which is also more parsemoneous) so we go with that model over the others
+
+
+allaic <- rbind(
+  outAIC(mod1.slope1), # final model
+  outAIC(mod1.slope),
+  outAIC(mod1.intp),
+  outAIC(lme.intp1)
+)
+allaic
+#AIC and BIC are smallest for random slope and intercept model when time is divided as pre and post
+```
+
+```{r}
+mm <- model.matrix(score ~ post + length + post:treatment, 
+                   random = ~ post | id, data = btb.long, na.action = na.omit)
+
+library(AICcmodavg)
+predval <- predictSE(mod1.slope1, newdata = mm)
+
+head(predval$fit)
+
+# using the ci function from above
+pred95ci <- ci(predval$fit, predval$se.fit, alpha = 0.05, df = 767)
+pred90ci <- ci(predval$fit, predval$se.fit, alpha = 0.1, df = 767)
+pred85ci <- ci(predval$fit, predval$se.fit, alpha = 0.15, df = 767)
+
+allpred <- as.data.frame(list(predval, pred95ci, pred90ci, pred85ci))
+smokpred <- cbind(smoking, allpred) %>%
+  group_by(smoking, year) %>%
+  mutate(meanfev1 = mean(fev1)) %>%
+  ungroup
+smokpred
+
+smokpred %>%
+  mutate(smoker = case_when(
+    smoking == 0 ~ "Former",
+    smoking == 1 ~ "Current"
+  )) %>%
+  ggplot(aes(x = year, y = fit)) +
+    geom_ribbon(aes(ymin = lo95ci, ymax = hi95ci, fill = smoker), alpha = .2) +
+    geom_ribbon(aes(ymin = lo90ci, ymax = hi90ci, fill = smoker), alpha = .4) +
+    geom_ribbon(aes(ymin = lo85ci, ymax = hi85ci, fill = smoker), alpha = .6) +
+    geom_line(aes(color = smoker)) + 
+    geom_point(aes(x = year, y = meanfev1, color = smoker)) + # add observed mean FEV1 
+    labs(title = "Observed and expected FEV1 values \nby year and smoking status", y = "FEV1 (liters)", x = "Year",   color = "Smoker", fill = "Smoker") 
+
+```
+
+
+```{r}
+condmean <- predict(mod1.slope1) # gives you the conditional means
+margmean <- predictSE(mod1.slope1, btb.long)$fit # gives you the marginal means
+predbf <- as.data.frame(cbind(btb.long, condmean, margmean))
+predbf %>%
+  ggplot(aes(x = time, y = condmean, group = id)) +
+  geom_line(linetype = 3, alpha = 0.7) + 
+  geom_point(aes(x = time, y = margmean), size = 1.5, color = "maroon") + 
+  labs(y = "Score", x = "Time") #+
+  #ylim(0,45) + xlim(-6.5,5)
+```
+
+
+```{r}
+# empirical cov and corr matrix
+btb.nona <- na.omit(btb)
+cov(btb.nona[, 5:9])
+cor(btb.nona[, 5:9])
+# the covariance and correlation matrices are not observed obvious patterns
+# tested the intercept + diff covariance error, but didn't perform well
+```
+### Model Diagnostics - Assumption
+
+```{r, fig.width=8, fig.height=6}
+#par(mfrow = c(1,2))
+## standardized stage-one residuals
+rhat <- resid(mod1.slope1, type = "normalized")
+head(rhat)
+
+## standardized stage-one residuals by "hand"
+condmean <- predict(mod1.slope1) # gives you the conditional means
+y <- btb.long$score
+stg1r <- y - condmean 
+
+estsigma2 <- sigma(mod1.slope1)^2
+estsigmamat <- estsigma2 * diag(dim(btb.long)[1])
+L <- chol(estsigmamat)
+stg1rstar <- solve(L) %*% stg1r
+head(stg1rstar)
+# they matched
+
+## comparing raw stage-one residuals and standardized residuals
+rtype <- c(rep("Raw", length(stg1r)), rep("Standardized", length(stg1r)))
+resid <- c(stg1r, stg1rstar)
+stg1resids <- as.data.frame(cbind(rtype, as.numeric(resid)))
+
+ggplot(stg1resids, aes(x = resid, fill = rtype)) +                    
+  geom_histogram(position = "identity", alpha = 0.5, bins = 50) + 
+  labs(y = "Count", x = "Residuals", fill = "Type") +
+  ggtitle("Histogram Comparing Raw Stage-One Residuals 
+          and Standardized Residuals")
+
+# qq plot of standardized residuals
+qqnorm(rhat, pch = 1, main = "Normal Q-Q Plot of Stage-One Standardized Residuals")
+qqline(rhat, col = "steelblue", lwd = 2)
+
+# Plot of standardized residuals against predicted mean
+yhat <- predict(mod1.slope1)
+plot(y = rhat, x = yhat, main = "Standardized Residuals vs Predicted Mean")
+```
+
+```{r, fig.width=10, fig.height=6}
+par(mfrow = c(1, 2))
+# normality assumption check for random effects
+b1hat <- ranef(mod1.slope1)[,1]
+b2hat <- ranef(mod1.slope1)[,2]
+
+qqnorm(b1hat, pch=1, main = "Normal Q-Q Plot of b1")
+qqline(b1hat, col = "steelblue", lwd = 2)
+
+qqnorm(b2hat, pch=1, main = "Normal Q-Q Plot of b2")
+qqline(b2hat, col = "steelblue", lwd = 2)
+# tails are not along the line
+
+# histogram of random effect
+ranef(mod1.slope1) %>%
+  pivot_longer(cols = c("(Intercept)", "post"),
+               names_to = "ranefs",
+               values_to = "estimates") %>%
+  ggplot(aes(x = estimates)) + 
+  geom_histogram(position = "identity", alpha = 0.5, bins = 50, fill = "orange") +
+  facet_grid(~ ranefs)
+# a little bit skewed, but should be fine
+```
+
+
+OLD CODE - TO DELETE
+```{r}
+
+##compare different variance structures
+
+##AR1
+mean.mod3.ml.ar1 <- gls(score ~ occasion + length + drug, 
+                        corr=corAR1(form= ~ occasion | id), 
+                        weights = varIdent(form = ~ 1 | occasion), 
+                        na.action = na.omit, method="ML", data = btb.long)
+
+##Compound Symmetry
+mean.mod3.ml.cs <- gls(score ~ occasion + length + drug, 
+                       corr=corCompSymm(form= ~ occasion | id), 
+                       weights = varIdent(form = ~ 1 | occasion), 
+                       na.action = na.omit, method="ML", data = btb.long)
+
+##compare AIC, BIC, LogLik
+compare = data.frame(
+  AIC = c(AIC(mean.mod3.ml), AIC(mean.mod3.ml.ar1), AIC(mean.mod3.ml.cs)),
+  BIC = c(BIC(mean.mod3.ml), BIC(mean.mod3.ml.ar1), BIC(mean.mod3.ml.cs)),
+  LogLik = c(logLik(mean.mod3.ml), logLik(mean.mod3.ml.ar1), logLik(mean.mod3.ml.cs))
+)
+compare
+# mean.mod3.ml has the smallest AIC 2675.3266
+# mean.mod3.ml.ar1 has the smallest BIC 2729.718
+# mean.mod3.ml has the biggest LogLik -1318.683
+```
+
+
+
+```{r}
+#spline model
+#dropped drug
+mod1.slope.knot <- lme(score ~ month + length + knot + month:treatment +  knot:treatment, random = ~ month + knot| id, data = btb.long, na.action = na.omit)
+
+summary(mod1.slope.knot)
+
+outAIC <- function(x){
+  sumx <- summary(x)
+  out <- c(sumx$AIC, sumx$BIC)
+  names(out) <- c("AIC", "BIC")
+  out
+}
+
+allaic <- rbind(
+  outAIC(mod1.slope.knot),
+  outAIC(mod1.slope1)
+
+)
+rownames(allaic) <- c("mod1.slope.knot", "mod1.slope1")
+allaic
+
+#Go with the model with a lower BIC because it values parsimony and is still a good fitting model
+```
+
+```{r}
+# normality assumption check for random effects
+b1hat <- ranef(mod1.slope.knot)[,1]
+b2hat <- ranef(mod1.slope.knot)[,2]
+b3hat <- ranef(mod1.slope.knot)[,3]
+
+qqnorm(b1hat, pch=1)
+qqline(b1hat, col = "steelblue", lwd = 2)
+
+qqnorm(b2hat, pch=1)
+qqline(b2hat, col = "steelblue", lwd = 2)
+
+qqnorm(b3hat, pch=1)
+qqline(b3hat, col = "steelblue", lwd = 2)
+# tails are not along the line
+
+# histogram of random effects
+ranef(mod1.slope.knot) %>%
+  pivot_longer(cols = c("(Intercept)", "month", "knot"),
+               names_to = "ranefs",
+               values_to = "estimates") %>%
+  ggplot(aes(x = estimates)) + 
+  geom_histogram(position = "identity", alpha = 0.5, bins = 50, fill = "orange") +
+  facet_grid(~ ranefs)
+
+# roughly symmetric
+```
+
+
+
+```{r}
+summary(mod1.slope1)
+fixed_effects <- data.frame(
+  Term = c("(Intercept)", "post", "length>6m", "post:treatmentBtheB"),
+  Estimate = c(21.776532, -6.128568, 3.046016, -3.063345),
+  Std.Error = c(1.455234, 1.281959, 1.925801, 1.665841),
+  DF = c(278, 278, 98, 278),
+  t_value = c(14.964278, -4.780627, 1.581688, -1.838919),
+  p_value = c("<0.001", "<0.001", 0.1169, 0.0670)
+)
+kable(fixed_effects, digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+random_effects <- data.frame(
+  Component = c("Intercept (SD)", "Slope: post (SD)", "Residual (SD)", "Correlation (Intercept, post)"),
+  Value = c(9.368, 6.649, 5.249, -0.269)
+)
+kable(random_effects, digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
