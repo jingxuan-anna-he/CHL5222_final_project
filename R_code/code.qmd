@@ -241,7 +241,6 @@ btb.nona <- na.omit(btb)
 cov(btb.nona[, 5:9])
 cor(btb.nona[, 5:9])
 # the covariance and correlation matrices are not observed obvious patterns
-# tested the intercept + diff covariance error, but didn't perform well
 ```
 
 ### Missing Data Exploration
@@ -279,85 +278,50 @@ btb %>%
 # missing data is monotone, arising from dropout, assume MAR, use likelihood methods like in class
 ```
 
-```{r}
-# empirical cov and corr matrix
-btb.nona <- na.omit(btb)
-cov(btb.nona[, 5:9])
-cor(btb.nona[, 5:9])
-# the covariance and correlation matrices are not observed obvious patterns
-# tested the intercept + diff covariance error, but didn't perform well
-```
-
 ### Methods
+Model Selection Process:
+
+- no need to include treatment because it is a randomized trial
+
 ```{r}
-#don't need to include treatment bc it is a randomized trial
-
-# pre post
-# time: 0 1 2 3 4
-btb.long <- btb.long %>%
-  group_by(id) %>%
-  mutate(time = row_number() - 1, 
-         post = ifelse(time > 0, 1, 0)) %>%
-  ungroup()
-
-btb.long <- btb.long %>%
-  mutate(month = ifelse(occasion == 0,0,
-                        ifelse(occasion == 1,2,
-                            ifelse(occasion== 2,4,
-                               ifelse(occasion== 3,6,
-                                ifelse(occasion == 4, 8, NA))))),
-    knot = ifelse(month - 2 < 0, 0, month - 2))
-
-
-btb.long <- na.omit(btb.long) 
-
 # random intercept
-mod1.intp <- lme(score ~ post + drug + length + post:treatment,
-               random = ~ 1 | id, data = btb.long, na.action = na.omit)
-summary(mod1.intp)
+lme.intp <- lme(score ~ occasion + drug + length + occasion:treatment, 
+                random = ~ 1 | id, data = btb.long, na.action = na.omit)
+#summary(lme.intp)
 
-# random intercept and slope model
-mod1.slope <- lme(score ~ post + drug + length + post:treatment, 
-                  random = ~ post | id, data = btb.long, na.action = na.omit)
-summary(mod1.slope)
+# random intercept and slope
+lme.slope <- lme(score ~ occasion + drug + length + occasion:treatment, 
+                 random = ~ occasion | id, data = btb.long, na.action = na.omit)
+#summary(lme.slope)
 
-# compare
-mod1.intp.ml <- lme(score ~ post + drug + length + post:treatment, random = ~ 1 | id, 
-                  method = "ML", data = btb.long, na.action = na.omit)
-mod1.slope.ml <- lme(score ~ post + drug + length + post:treatment, random = ~ post | id, 
-                  method = "ML", data = btb.long, na.action = na.omit, 
-)
-anova(mod1.intp.ml, mod1.slope.ml)
+# compare using likelihood ratio test
+lme.intp.ml <- lme(score ~ occasion + drug + length + occasion:treatment, 
+                random = ~ 1 | id, method = "ML",
+                data = btb.long, na.action = na.omit)
+lme.slope.ml <- lme(score ~ occasion + drug + length + occasion:treatment, 
+                 random = ~ occasion | id, method = "ML",
+                 data = btb.long, na.action = na.omit)
+anova(lme.intp.ml, lme.slope.ml) # lme.intp.ml is better
 
-#since p-value <0.0001, the random intercept and slope model is significantly better
-#also exclude drug because it is not significant in either model
+# drop drug for the intercept model since not significant
+lme.intp1 <- lme(score ~ occasion + length + occasion:treatment, random = ~ 1 | id,
+                data = btb.long, na.action = na.omit)
 
-# final model
-mod1.slope1 <- lme(score ~ post + length + post:treatment, 
-                  random = ~ post | id, data = btb.long, na.action = na.omit)
+lme.intp1.ml <- lme(score ~ occasion + length + occasion:treatment, 
+                random = ~ 1 | id, method = "ML",
+                data = btb.long, na.action = na.omit)
+anova(lme.intp1.ml, lme.intp.ml)
 ```
 
 ```{r}
-lme.intp <- lme(score ~ occasion + drug + length + occasion:treatment, 
-                random = ~ 1 | id,
-                data = btb.long, na.action = na.omit)
-summary(lme.intp)
-
-lme.slope <- lme(score ~ occasion + drug + length + occasion:treatment, 
-                 random = ~ occasion | id,
-                 data = btb.long, na.action = na.omit)
-summary(lme.slope)
-
-lme.intp1 <- lme(score ~ occasion + length + occasion:treatment, 
-                random = ~ 1 | id,
-                data = btb.long, na.action = na.omit)
-
+# AIC and BIC function for model comparison
 outAIC <- function(x){
   sumx <- summary(x)
   out <- c(sumx$AIC, sumx$BIC)
   names(out) <- c("AIC", "BIC")
   out
 }
+
 allaic <- rbind(
   outAIC(lme.intp),
   outAIC(lme.slope),
@@ -365,52 +329,110 @@ allaic <- rbind(
 )
 rownames(allaic) <- c("lme.intp", "lme.slope", "lme.intp1")
 allaic
-#AIC is similar for all models but BIC is lowest for lme.intp1 (which is also more parsemoneous) so we go with that model over the others
+#AIC is similar for all models but BIC is lowest for lme.intp1 (which is also more parsimonious)
+#so we go with that model over the others
+```
+
+Create a binary indicator of pre- and post-treatment: post
+```{r}
+btb.long <- btb.long %>%
+  group_by(id) %>%
+  mutate(time = row_number() - 1, # time: 0 1 2 3 4
+         post = ifelse(time > 0, 1, 0)) %>%
+  ungroup()
+```
 
 
+```{r}
+# random intercept
+mod1.intp <- lme(score ~ post + drug + length + post:treatment,
+                 random = ~ 1 | id, data = btb.long, na.action = na.omit)
+#summary(mod1.intp)
+
+# random intercept and slope model
+mod1.slope <- lme(score ~ post + drug + length + post:treatment, 
+                  random = ~ post | id, data = btb.long, na.action = na.omit)
+#summary(mod1.slope)
+
+# compare using likelihood ratio test
+mod1.intp.ml <- lme(score ~ post + drug + length + post:treatment, random = ~ 1 | id, 
+                    method = "ML", data = btb.long, na.action = na.omit)
+mod1.slope.ml <- lme(score ~ post + drug + length + post:treatment, random = ~ post | id, 
+                    method = "ML", data = btb.long, na.action = na.omit)
+anova(mod1.intp.ml, mod1.slope.ml)
+#since p-value <0.0001, the random intercept and slope model is significantly better
+
+mod1.slope1 <- lme(score ~ post + length + post:treatment, 
+                   random = ~ post | id, data = btb.long, na.action = na.omit)
+```
+
+```{r}
 allaic <- rbind(
   outAIC(mod1.slope1), # final model
   outAIC(mod1.slope),
   outAIC(mod1.intp),
-  outAIC(lme.intp1)
+  outAIC(lme.intp1),
+  outAIC(lme.intp)
 )
+rownames(allaic) <- c("mod1.slope1", "mod1.slope", "mod1.intp", "lme.intp1", "lme.intp")
 allaic
-#AIC and BIC are smallest for random slope and intercept model when time is divided as pre and post
+#BIC is smallest for random slope and intercept model when time is divided as pre and post without drug: mod1.slope1
+```
+
+Final Model:
+$$Y_{ij} = \beta0 + \beta1 \text{ Post}_{ij} + \beta2 \text{ Length}_i + \beta3 \text{ Post}_{ij} \times \text{Treatment}_{i} + b_{1i} + b_{2i} \text{ Post}_{ij} + \epsilon_{ij}$$
+
+```{r}
+# exclude drug because it is not significant in all models (choose the parsimonious model)
+
+# final model
+mod1.slope1 <- lme(score ~ post + length + post:treatment, 
+                  random = ~ post | id, data = btb.long, na.action = na.omit)
+summary(mod1.slope1)
+
+summary_df <- broom.mixed::tidy(mod1.slope1, effect = "fixed", conf.int = TRUE)
+summary_df %>%
+  kable(format = "html", digits = 2, caption = "Fixed Effects of the LME Model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
 ```
 
 
-$$Y_{ij} = \beta1 + \beta2 \text{ Post}_{ij} + \beta3 \text{ Length}_i + \beta4 \text{ Post}_{ij} \times \text{Treatment}_{i} + b_{1i} + b_{2i} \text{ Post}_{ij} + \epsilon_{ij}$$
 ```{r}
-summary(mod1.slope1)
-fixed_effects <- data.frame(
-  Term = c("(Intercept)", "post", "length>6m", "post:treatmentBtheB"),
-  Estimate = c(21.776532, -6.128568, 3.046016, -3.063345),
-  Std.Error = c(1.455234, 1.281959, 1.925801, 1.665841),
-  DF = c(278, 278, 98, 278),
-  t_value = c(14.964278, -4.780627, 1.581688, -1.838919),
-  p_value = c("<0.001", "<0.001", 0.1169, 0.0670)
-)
-kable(fixed_effects, digits = 3) %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
-random_effects <- data.frame(
-  Component = c("Intercept (SD)", "Slope: post (SD)", "Residual (SD)", "Correlation (Intercept, post)"),
-  Value = c(9.368, 6.649, 5.249, -0.269)
-)
-kable(random_effects, digits = 3) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"))
+getVarCov(mod1.slope1) # G matrix
+
+mod1.slope1$varFix # covariance of fixed effects (beta) estimates
+```
+
+```{r}
+# 95% CI for TAU group
+-6.128568 + c(-1, 1)*qnorm(0.975)*1.281959
+
+# 95% CI for BtheB group 
+-6.128568-3.063345
+SE <- sqrt(1.64341914 + 2.77502525 + 2*0.09859223)
+-9.191913 + c(-1, 1)*1.96*SE
+
+
+# 95% quintile of the random slope with the population effect as the center
+# to understand how wide (or narrow) the variance of the random effects are
+21.776532 + c(-1,1)*qnorm(0.975)*9.367765 # random intp
+
+-3.063345 + c(-1,1)*qnorm(0.975)*6.648816 # random slope
 ```
 
 
 ### Model Diagnostics - Assumption
+Normality assumption check for stage-one residuals:
 
-```{r, fig.width=8, fig.height=6}
-#par(mfrow = c(1,2))
-## standardized stage-one residuals
+```{r}
+btb.long <- na.omit(btb.long)
+
+# standardized stage-one residuals
 rhat <- resid(mod1.slope1, type = "normalized")
 head(rhat)
 
-## standardized stage-one residuals by "hand"
-condmean <- predict(mod1.slope1) # gives you the conditional means
+# standardized stage-one residuals by "hand"
+condmean <- predict(mod1.slope1) # conditional means
 y <- btb.long$score
 stg1r <- y - condmean 
 
@@ -418,10 +440,9 @@ estsigma2 <- sigma(mod1.slope1)^2
 estsigmamat <- estsigma2 * diag(dim(btb.long)[1])
 L <- chol(estsigmamat)
 stg1rstar <- solve(L) %*% stg1r
-head(stg1rstar)
-# they matched
+head(stg1rstar) # they matched
 
-## comparing raw stage-one residuals and standardized residuals
+# comparing raw stage-one residuals and standardized residuals
 rtype <- c(rep("Raw", length(stg1r)), rep("Standardized", length(stg1r)))
 resid <- c(stg1r, stg1rstar)
 stg1resids <- as.data.frame(cbind(rtype, as.numeric(resid)))
@@ -429,8 +450,10 @@ stg1resids <- as.data.frame(cbind(rtype, as.numeric(resid)))
 ggplot(stg1resids, aes(x = resid, fill = rtype)) +                    
   geom_histogram(position = "identity", alpha = 0.5, bins = 50) + 
   labs(y = "Count", x = "Residuals", fill = "Type") +
-  ggtitle("Histogram Comparing Raw Stage-One Residuals 
-          and Standardized Residuals")
+  ggtitle("Histogram of Comparing Raw Stage-One Residuals 
+          and Standardized Residuals") + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
 
 # qq plot of standardized residuals
 qqnorm(rhat, pch = 1, main = "Normal Q-Q Plot of Stage-One Standardized Residuals")
@@ -441,20 +464,22 @@ yhat <- predict(mod1.slope1)
 plot(y = rhat, x = yhat, main = "Standardized Residuals vs Predicted Mean")
 ```
 
-```{r, fig.width=10, fig.height=6}
+
+Normality assumption check for random effects:
+```{r}
 par(mfrow = c(1, 2))
-# normality assumption check for random effects
+
 b1hat <- ranef(mod1.slope1)[,1]
 b2hat <- ranef(mod1.slope1)[,2]
 
+# qq plot of random effects
 qqnorm(b1hat, pch=1, main = "Normal Q-Q Plot of b1")
 qqline(b1hat, col = "steelblue", lwd = 2)
 
 qqnorm(b2hat, pch=1, main = "Normal Q-Q Plot of b2")
 qqline(b2hat, col = "steelblue", lwd = 2)
-# tails are not along the line
 
-# histogram of random effect
+# histogram of random effects
 ranef(mod1.slope1) %>%
   pivot_longer(cols = c("(Intercept)", "post"),
                names_to = "ranefs",
@@ -462,35 +487,7 @@ ranef(mod1.slope1) %>%
   ggplot(aes(x = estimates)) + 
   geom_histogram(position = "identity", alpha = 0.5, bins = 50, fill = "orange") +
   facet_grid(~ ranefs)
-# a little bit skewed, but should be fine
-```
-
-
-
-```{r}
-#spline model
-#dropped drug
-mod1.slope.knot <- lme(score ~ month + length + knot + month:treatment + knot:treatment, 
-                       random = ~ month + knot| id, data = btb.long, na.action = na.omit)
-
-summary(mod1.slope.knot)
-
-outAIC <- function(x){
-  sumx <- summary(x)
-  out <- c(sumx$AIC, sumx$BIC)
-  names(out) <- c("AIC", "BIC")
-  out
-}
-
-allaic <- rbind(
-  outAIC(mod1.slope.knot),
-  outAIC(mod1.slope1)
-
-)
-rownames(allaic) <- c("mod1.slope.knot", "mod1.slope1")
-allaic
-
-#Go with the model with a lower BIC because it values parsimony and is still a good fitting model
+# a little bit skewed, but as long as it's not overly skewed, it is fine
 ```
 
 
