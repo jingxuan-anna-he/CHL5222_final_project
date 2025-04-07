@@ -153,8 +153,8 @@ ggplot(btb.long, aes(x = occasion, y = score, group = id, color = factor(treatme
   theme_minimal() +
   theme(plot.title = element_text(hjust = 0.5))
 
-##spaghetti plot shows high variation between subject BDI scores so we will fit a LMM with 
-##random intercept and maybe random slope to account for this variation
+#spaghetti plot shows high variation between subject BDI scores so we will fit a LMM with 
+#random intercept and maybe random slope to account for this variation
 ```
 
 
@@ -398,26 +398,28 @@ summary_df %>%
 
 
 ```{r}
-getVarCov(mod1.slope1) # G matrix
-
-mod1.slope1$varFix # covariance of fixed effects (beta) estimates
+G <- getVarCov(mod1.slope1) # G matrix
+G
+vcov <- mod1.slope1$varFix # covariance of fixed effects (beta) estimates
+vcov
 ```
 
 ```{r}
-# 95% CI for TAU group
--6.128568 + c(-1, 1)*qnorm(0.975)*1.281959
+mod_summary <- coef(summary(mod1.slope1))
 
-# 95% CI for BtheB group 
--6.128568-3.063345
-SE <- sqrt(1.64341914 + 2.77502525 + 2*0.09859223)
--9.191913 + c(-1, 1)*1.96*SE
+# follow-up compared to baseline
+# 95% CI for TAU group 
+mod_summary["post", "Value"] + c(-1, 1)*qnorm(0.975)*mod_summary["post", "Std.Error"]
 
+# 95% CI for BtheB group
+(mod_summary[2,1] + mod_summary[4,1]) + 
+  c(-1, 1)*qnorm(0.975)*sqrt(vcov[2,2] + vcov[4,4] + 2*vcov[2,4])
 
 # 95% quintile of the random slope with the population effect as the center
 # to understand how wide (or narrow) the variance of the random effects are
-21.776532 + c(-1,1)*qnorm(0.975)*9.367765 # random intp
+mod_summary[1,1] + c(-1,1)*qnorm(0.975)*sqrt(G[1,1]) # random intp
 
--3.063345 + c(-1,1)*qnorm(0.975)*6.648816 # random slope
+mod_summary[4,1] + c(-1,1)*qnorm(0.975)*sqrt(G[2,2]) # random slope
 ```
 
 
