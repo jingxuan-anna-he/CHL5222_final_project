@@ -138,10 +138,10 @@ ggplot(btb.long, aes(x = occasion, y = score, color = treatment)) +
 ```
 
 ```{r}
-#spaghetti plot with Marginal Mean Response Over Time
+#spaghetti plot - individual trajectory and a loess smoother
 ggplot(btb.long, aes(x = occasion, y = score, group = id, color = factor(treatment))) +
   geom_line(alpha = 0.4) +          # Individual trajectories
-  geom_smooth(aes(group = treatment), method = "loess", se = FALSE, linewidth = 1.2) +  # Marginal means
+  geom_smooth(aes(group = treatment), method = "loess", se = FALSE, linewidth = 1.2) +
   labs(
     x = "Occasion",
     y = "BDI Score",
